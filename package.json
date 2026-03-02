@@ -1,0 +1,12 @@
+{
+  "name": "app-iot-nueva",
+  "version": "1.0.0",
+  "description": "Aplicación IoT para ejercicio CI/CD",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
