@@ -50,6 +50,9 @@ jobs:
           NAMESPACE="app-iot-nuevo"
           IMAGEN="ghcr.io/jmunoz-tc/app-iot-nueva:1.0.${{ github.run_number }}"
           
+          # Crear namespace si no existe
+          kubectl get namespace $NAMESPACE || kubectl create namespace $NAMESPACE
+          
           # Login en GHCR
           echo "🔑 Login en GHCR..."
           echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u jmunoz-tc --password-stdin
@@ -68,65 +71,29 @@ jobs:
               --docker-email=jmunoz@tequila.capital \
               -n $NAMESPACE
           
-          # Crear archivos YAML temporales
-          echo "🔄 Creando archivos de configuración..."
+          # Crear deployment (simplificado)
+          echo "🔄 Creando deployment..."
+          kubectl delete deployment app-iot-nueva -n $NAMESPACE --ignore-not-found
+          kubectl create deployment app-iot-nueva -n $NAMESPACE --image=$IMAGEN --port=3000
           
-          # Deployment YAML
-          cat > /tmp/deployment.yaml <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-iot-nueva
-  namespace: $NAMESPACE
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: app-iot-nueva
-  template:
-    metadata:
-      labels:
-        app: app-iot-nueva
-    spec:
-      imagePullSecrets:
-      - name: ghcr-secret
-      containers:
-      - name: app-iot-nueva
-        image: $IMAGEN
-        ports:
-        - containerPort: 3000
-        resources:
-          requests:
-            memory: "32Mi"
-            cpu: "25m"
-          limits:
-            memory: "64Mi"
-            cpu: "50m"
-EOF
+          # Configurar imagePullSecrets
+          echo "🔧 Configurando imagePullSecrets..."
+          kubectl patch deployment app-iot-nueva -n $NAMESPACE -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"ghcr-secret"}]}}}}'
           
-          # Service YAML
-          cat > /tmp/service.yaml <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: app-iot-servicio
-  namespace: $NAMESPACE
-spec:
-  selector:
-    app: app-iot-nueva
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 3000
-  type: NodePort
-EOF
+          # Configurar recursos
+          echo "⚙️ Configurando recursos..."
+          kubectl set resources deployment app-iot-nueva -n $NAMESPACE \
+            --requests=cpu=25m,memory=32Mi \
+            --limits=cpu=50m,memory=64Mi
           
-          # Aplicar archivos
-          echo "📦 Aplicando deployment..."
-          kubectl apply -f /tmp/deployment.yaml
-          
-          echo "🌐 Aplicando servicio..."
-          kubectl apply -f /tmp/service.yaml
+          # Crear servicio
+          echo "🌐 Creando servicio..."
+          kubectl delete service app-iot-servicio -n $NAMESPACE --ignore-not-found
+          kubectl expose deployment app-iot-nueva -n $NAMESPACE \
+            --name=app-iot-servicio \
+            --type=NodePort \
+            --port=80 \
+            --target-port=3000
           
           # Esperar rollout
           echo "⏳ Esperando rollout..."
