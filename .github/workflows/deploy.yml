@@ -1,0 +1,135 @@
+name: CI/CD App IoT Nueva
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v3
+      
+    - name: Verificar secretos
+      run: |
+        if [ -z "${{ secrets.GHCR_TOKEN }}" ]; then echo "❌ FALTA GHCR_TOKEN"; exit 1; fi
+        if [ -z "${{ secrets.SERVER_HOST }}" ]; then echo "❌ FALTA SERVER_HOST"; exit 1; fi
+        if [ -z "${{ secrets.SERVER_USER }}" ]; then echo "❌ FALTA SERVER_USER"; exit 1; fi
+        if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then echo "❌ FALTA SSH_PRIVATE_KEY"; exit 1; fi
+        echo "✅ Todos los secretos OK"
+      
+    - name: Login a GHCR
+      env:
+        GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      run: |
+        echo $GHCR_TOKEN | docker login ghcr.io -u jmunoz-tc --password-stdin
+        echo "✅ Login exitoso"
+        
+    - name: Build y push imagen
+      run: |
+        IMAGEN="ghcr.io/jmunoz-tc/app-iot-nueva:1.0.${{ github.run_number }}"
+        docker build -t $IMAGEN .
+        docker push $IMAGEN
+        echo "✅ Imagen: $IMAGEN"
+        echo "IMAGEN=$IMAGEN" >> $GITHUB_ENV
+      
+    - name: Desplegar en servidor real
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          set -e
+          echo "🚀 Iniciando despliegue en servidor real..."
+          
+          # Variables
+          NAMESPACE="app-iot-nuevo"
+          IMAGEN="ghcr.io/jmunoz-tc/app-iot-nueva:1.0.${{ github.run_number }}"
+          
+          # Login en GHCR
+          echo "🔑 Login en GHCR..."
+          echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u jmunoz-tc --password-stdin
+          
+          # Descargar imagen (verificación)
+          echo "📦 Verificando imagen..."
+          docker pull $IMAGEN
+          
+          # Crear secreto si no existe
+          echo "🔒 Configurando secreto en Kubernetes..."
+          kubectl get secret ghcr-secret -n $NAMESPACE || \
+            kubectl create secret docker-registry ghcr-secret \
+              --docker-server=ghcr.io \
+              --docker-username=jmunoz-tc \
+              --docker-password=${{ secrets.GHCR_TOKEN }} \
+              --docker-email=jmunoz@tequila.capital \
+              -n $NAMESPACE
+          
+          # Aplicar deployment
+          echo "🔄 Aplicando deployment..."
+          cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-iot-nueva
+  namespace: $NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-iot-nueva
+  template:
+    metadata:
+      labels:
+        app: app-iot-nueva
+    spec:
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: app-iot-nueva
+        image: $IMAGEN
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+EOF
+          
+          # Aplicar servicio
+          echo "🌐 Aplicando servicio..."
+          cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-iot-servicio
+  namespace: $NAMESPACE
+spec:
+  selector:
+    app: app-iot-nueva
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: NodePort
+EOF
+          
+          # Esperar rollout
+          echo "⏳ Esperando rollout..."
+          kubectl rollout status deployment/app-iot-nueva -n $NAMESPACE
+          
+          # Mostrar información
+          echo "📊 Pods:"
+          kubectl get pods -n $NAMESPACE
+          echo "🌐 Servicio:"
+          kubectl get svc -n $NAMESPACE app-iot-servicio
+          
+          # URL de acceso
+          NODE_PORT=$(kubectl get svc -n $NAMESPACE app-iot-servicio -o jsonpath='{.spec.ports[0].nodePort}')
+          echo "✅ App disponible en: http://${{ secrets.SERVER_HOST }}:$NODE_PORT"
