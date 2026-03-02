@@ -68,9 +68,11 @@ jobs:
               --docker-email=jmunoz@tequila.capital \
               -n $NAMESPACE
           
-          # Aplicar deployment
-          echo "🔄 Aplicando deployment..."
-          cat <<EOF | kubectl apply -f -
+          # Crear archivos YAML temporales
+          echo "🔄 Creando archivos de configuración..."
+          
+          # Deployment YAML
+          cat > /tmp/deployment.yaml <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -102,9 +104,8 @@ spec:
             cpu: "50m"
 EOF
           
-          # Aplicar servicio
-          echo "🌐 Aplicando servicio..."
-          cat <<EOF | kubectl apply -f -
+          # Service YAML
+          cat > /tmp/service.yaml <<EOF
 apiVersion: v1
 kind: Service
 metadata:
@@ -120,13 +121,21 @@ spec:
   type: NodePort
 EOF
           
+          # Aplicar archivos
+          echo "📦 Aplicando deployment..."
+          kubectl apply -f /tmp/deployment.yaml
+          
+          echo "🌐 Aplicando servicio..."
+          kubectl apply -f /tmp/service.yaml
+          
           # Esperar rollout
           echo "⏳ Esperando rollout..."
-          kubectl rollout status deployment/app-iot-nueva -n $NAMESPACE
+          kubectl rollout status deployment/app-iot-nueva -n $NAMESPACE --timeout=120s
           
           # Mostrar información
           echo "📊 Pods:"
           kubectl get pods -n $NAMESPACE
+          
           echo "🌐 Servicio:"
           kubectl get svc -n $NAMESPACE app-iot-servicio
           
